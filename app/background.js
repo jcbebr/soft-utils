@@ -204,25 +204,23 @@ async function scanKanbanBoard() {
 
   if (!config.kanbanPageUrl) return
 
-  const tabs = await queryTabs({ url: 'https://sesuite.softexpert.com/*' })
-  if (!tabs || tabs.length === 0) return
+  const [activeTab] = await queryTabs({ active: true, currentWindow: true })
+  if (!activeTab || !activeTab.id) return
 
   const missingTasks = new Set()
   const missingChangelogTasks = new Set()
   const approvalsByMr = new Map()
 
-  for (const tab of tabs) {
-    const result = await executeScript({
-      target: { tabId: tab.id },
-      func: collectKanbanTasks,
-      args: [config.kanbanPageUrl]
-    })
+  const result = await executeScript({
+    target: { tabId: activeTab.id },
+    func: collectKanbanTasks,
+    args: [config.kanbanPageUrl]
+  })
 
-    const payload = result && result[0] && result[0].result ? result[0].result : {}
-    const tasks = payload.tasks ? payload.tasks : []
+  const payload = result && result[0] && result[0].result ? result[0].result : {}
+  const tasks = payload.tasks ? payload.tasks : []
 
-    if (tasks.length === 0) continue
-
+  if (tasks.length > 0) {
     for (const idtask of tasks) {
       const taskDataText = await fetchTaskData(idtask, config.kanbanWorkspaceId)
       const attributes = extractTaskAttributes(taskDataText)
