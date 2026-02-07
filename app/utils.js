@@ -27,7 +27,9 @@ export function setStorage(value) {
   chrome.storage.sync.set(value)
 }
 
-export function getStorage(value) {
+export function getStorage(keys, callback) {
   if (canRunStorage() === false) return
-  chrome.storage.sync.get(value)
+  const resolvedCallback = typeof keys === 'function' ? keys : callback
+  const resolvedKeys = typeof keys === 'function' ? null : keys
+  chrome.storage.sync.get(resolvedKeys, resolvedCallback)
 }

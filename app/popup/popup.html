@@ -7,6 +7,16 @@
 
 <body>
   <button id="fillCt">Preencher CT</button>
+  <button id="scanKanban">Scan Kanban</button>
+  <div id="kanbanStatus">
+    <h3>Missing MR</h3>
+    <div id="kanbanLastRun"></div>
+    <ul id="kanbanMissingList"></ul>
+    <h3>Missing Changelog</h3>
+    <ul id="kanbanMissingChangelogList"></ul>
+    <h3>Approvals</h3>
+    <ul id="kanbanApprovalsList"></ul>
+  </div>
   <script type="module" src="popup.js"></script>
 </body>
 

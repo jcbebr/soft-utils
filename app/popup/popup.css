@@ -24,3 +24,24 @@ button:hover {
 body {
   background-color: var(--colorBackground)
 }
+
+#kanbanStatus {
+  margin: 10px;
+  color: var(--colorText);
+  font-family: monospace;
+  font-size: 12px;
+}
+
+#kanbanStatus h3 {
+  margin: 8px 0 4px 0;
+}
+
+#kanbanLastRun {
+  opacity: 0.8;
+  margin-bottom: 6px;
+}
+
+#kanbanMissingList {
+  margin: 0;
+  padding-left: 16px;
+}
