@@ -195,6 +195,300 @@ function collectKanbanTasks(pageUrl) {
   return { tasks: Array.from(new Set(tasks)) }
 }
 
+function injectWarnings(taskWarnings) {
+  // Remove previous warnings
+  document.querySelectorAll('.su-warn-badge, .su-warn-overlay').forEach(el => el.remove())
+
+  // Inject styles once
+  if (!document.getElementById('su-warn-styles')) {
+    const style = document.createElement('style')
+    style.id = 'su-warn-styles'
+    style.textContent = `
+      .su-warn-badge {
+        position: absolute;
+        top: -2px;
+        right: 28px;
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        background: #ef4444;
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+        z-index: 50;
+        box-shadow: 0 1px 4px rgba(0,0,0,0.18);
+        border: 2px solid #fff;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        line-height: 1;
+      }
+      .su-warn-badge:hover {
+        transform: scale(1.15);
+        box-shadow: 0 2px 8px rgba(239,68,68,0.4);
+      }
+      .su-warn-badge--yellow {
+        background: #f59e0b;
+      }
+      .su-warn-overlay {
+        position: fixed;
+        top: 0; left: 0; right: 0; bottom: 0;
+        z-index: 10000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0,0,0,0.35);
+        backdrop-filter: blur(2px);
+        animation: su-fade-in 0.15s ease;
+      }
+      @keyframes su-fade-in {
+        from { opacity: 0; }
+        to { opacity: 1; }
+      }
+      .su-warn-popup {
+        background: #fff;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08);
+        padding: 0;
+        min-width: 360px;
+        max-width: 480px;
+        max-height: 80vh;
+        overflow: hidden;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        animation: su-pop-in 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      @keyframes su-pop-in {
+        from { transform: scale(0.92); opacity: 0; }
+        to { transform: scale(1); opacity: 1; }
+      }
+      .su-warn-popup__header {
+        background: linear-gradient(135deg, #1e3a5f 0%, #1d4c58 100%);
+        color: #fff;
+        padding: 16px 20px;
+        font-size: 15px;
+        font-weight: 600;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .su-warn-popup__close {
+        background: rgba(255,255,255,0.15);
+        border: none;
+        color: #fff;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        cursor: pointer;
+        font-size: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        transition: background 0.15s;
+      }
+      .su-warn-popup__close:hover {
+        background: rgba(255,255,255,0.3);
+      }
+      .su-warn-popup__body {
+        padding: 16px 20px;
+        overflow-y: auto;
+        max-height: 60vh;
+      }
+      .su-warn-section {
+        margin-bottom: 14px;
+      }
+      .su-warn-section:last-child {
+        margin-bottom: 0;
+      }
+      .su-warn-section__title {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        color: #64748b;
+        margin-bottom: 6px;
+      }
+      .su-warn-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: 13px;
+        color: #1e293b;
+        line-height: 1.4;
+      }
+      .su-warn-item--error {
+        background: #fef2f2;
+        border: 1px solid #fecaca;
+      }
+      .su-warn-item--warning {
+        background: #fffbeb;
+        border: 1px solid #fde68a;
+      }
+      .su-warn-item--ok {
+        background: #f0fdf4;
+        border: 1px solid #bbf7d0;
+      }
+      .su-warn-item + .su-warn-item {
+        margin-top: 4px;
+      }
+      .su-warn-icon {
+        font-size: 14px;
+        flex-shrink: 0;
+      }
+      .su-warn-mr-url {
+        color: #196fff;
+        text-decoration: none;
+        font-weight: 500;
+        word-break: break-all;
+      }
+      .su-warn-mr-url:hover {
+        text-decoration: underline;
+      }
+      .su-warn-approvals {
+        margin-left: auto;
+        font-weight: 600;
+        padding: 2px 8px;
+        border-radius: 10px;
+        font-size: 12px;
+        white-space: nowrap;
+      }
+      .su-warn-approvals--ok {
+        background: #dcfce7;
+        color: #166534;
+      }
+      .su-warn-approvals--low {
+        background: #fee2e2;
+        color: #991b1b;
+      }
+    `
+    document.head.appendChild(style)
+  }
+
+  function showPopup(taskId, warnings) {
+    document.querySelectorAll('.su-warn-overlay').forEach(el => el.remove())
+
+    const overlay = document.createElement('div')
+    overlay.className = 'su-warn-overlay'
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove()
+    })
+
+    const popup = document.createElement('div')
+    popup.className = 'su-warn-popup'
+
+    const header = document.createElement('div')
+    header.className = 'su-warn-popup__header'
+    header.innerHTML = '<span>' + taskId + ' — Warnings</span>'
+    const closeBtn = document.createElement('button')
+    closeBtn.className = 'su-warn-popup__close'
+    closeBtn.textContent = '✕'
+    closeBtn.addEventListener('click', () => overlay.remove())
+    header.appendChild(closeBtn)
+    popup.appendChild(header)
+
+    const body = document.createElement('div')
+    body.className = 'su-warn-popup__body'
+
+    // Changelog section
+    const changelogSection = document.createElement('div')
+    changelogSection.className = 'su-warn-section'
+    const changelogTitle = document.createElement('div')
+    changelogTitle.className = 'su-warn-section__title'
+    changelogTitle.textContent = 'Changelog'
+    changelogSection.appendChild(changelogTitle)
+    const changelogItem = document.createElement('div')
+    if (warnings.missingChangelog) {
+      changelogItem.className = 'su-warn-item su-warn-item--error'
+      changelogItem.innerHTML = '<span class="su-warn-icon">❌</span> Missing changelog'
+    } else {
+      changelogItem.className = 'su-warn-item su-warn-item--ok'
+      changelogItem.innerHTML = '<span class="su-warn-icon">✅</span> Changelog present'
+    }
+    changelogSection.appendChild(changelogItem)
+    body.appendChild(changelogSection)
+
+    // MR section
+    const mrSection = document.createElement('div')
+    mrSection.className = 'su-warn-section'
+    const mrTitle = document.createElement('div')
+    mrTitle.className = 'su-warn-section__title'
+    mrTitle.textContent = 'Merge Requests'
+    mrSection.appendChild(mrTitle)
+
+    if (warnings.missingMr) {
+      const noMr = document.createElement('div')
+      noMr.className = 'su-warn-item su-warn-item--error'
+      noMr.innerHTML = '<span class="su-warn-icon">❌</span> No MR linked'
+      mrSection.appendChild(noMr)
+    } else if (warnings.mrs && warnings.mrs.length > 0) {
+      warnings.mrs.forEach(function(mr) {
+        const mrItem = document.createElement('div')
+        const isUnknown = typeof mr.approvals !== 'number'
+        const isLow = !isUnknown && mr.approvals < 2
+        const isOk = !isUnknown && mr.approvals >= 2
+        mrItem.className = 'su-warn-item ' + (isOk ? 'su-warn-item--ok' : isLow ? 'su-warn-item--warning' : 'su-warn-item--error')
+        const projectName = mr.mrUrl.split('/-/')[0].split('/').slice(-1)[0] || mr.mrUrl
+        const approvalsLabel = isUnknown ? '?' : mr.approvals
+        const icon = isOk ? '✅' : isLow ? '⚠️' : '❓'
+        mrItem.innerHTML =
+          '<span class="su-warn-icon">' + icon + '</span>' +
+          '<a href="' + mr.mrUrl + '" target="_blank" class="su-warn-mr-url">' + projectName + ' #' + (mr.mrUrl.match(/merge_requests\/(\d+)/) || ['','?'])[1] + '</a>' +
+          '<span class="su-warn-approvals ' + (isOk ? 'su-warn-approvals--ok' : 'su-warn-approvals--low') + '">' +
+          approvalsLabel + '/2 approvals</span>'
+        mrSection.appendChild(mrItem)
+      })
+    }
+    body.appendChild(mrSection)
+
+    popup.appendChild(body)
+    overlay.appendChild(popup)
+    document.body.appendChild(overlay)
+  }
+
+  // Inject badges on each card
+  Object.keys(taskWarnings).forEach(function(taskId) {
+    const warnings = taskWarnings[taskId]
+    const hasIssue = warnings.missingChangelog || warnings.missingMr || warnings.lowApprovals
+    if (!hasIssue) return
+
+    const cards = document.querySelectorAll('[data-test-selector="rctCardBase"]')
+    cards.forEach(function(card) {
+      const linkEl = card.querySelector('.Card__identifier a')
+      if (!linkEl) return
+      if (linkEl.innerText.trim() !== taskId) return
+
+      const topRight = card.querySelector('.Card__top__right__relative')
+      if (!topRight) return
+      const parent = topRight.parentElement
+      if (!parent) return
+
+      // Remove previous badge on this card
+      parent.querySelectorAll('.su-warn-badge').forEach(el => el.remove())
+
+      const issueCount = (warnings.missingChangelog ? 1 : 0) +
+        (warnings.missingMr ? 1 : 0) +
+        (warnings.lowApprovals ? warnings.mrs.filter(function(m) { return typeof m.approvals !== 'number' || m.approvals < 2 }).length : 0)
+
+      const badge = document.createElement('div')
+      badge.className = 'su-warn-badge' + (warnings.missingChangelog || warnings.missingMr ? '' : ' su-warn-badge--yellow')
+      badge.textContent = issueCount > 9 ? '9+' : String(issueCount)
+      badge.title = 'Click for details'
+
+      badge.addEventListener('click', function(e) {
+        e.stopPropagation()
+        e.preventDefault()
+        showPopup(taskId, warnings)
+      })
+
+      parent.insertBefore(badge, topRight)
+    })
+  })
+}
+
 async function scanKanbanBoard() {
   const config = await getStorageValues([
     'kanbanPageUrl',
@@ -210,6 +504,7 @@ async function scanKanbanBoard() {
   const missingTasks = new Set()
   const missingChangelogTasks = new Set()
   const approvalsByMr = new Map()
+  const taskWarnings = {}
 
   const result = await executeScript({
     target: { tabId: activeTab.id },
@@ -224,25 +519,52 @@ async function scanKanbanBoard() {
     for (const idtask of tasks) {
       const taskDataText = await fetchTaskData(idtask, config.kanbanWorkspaceId)
       const attributes = extractTaskAttributes(taskDataText)
+
+      const warnings = {
+        missingChangelog: false,
+        missingMr: false,
+        lowApprovals: false,
+        mrs: []
+      }
+
       if (attributes.mrUrls.length > 0) {
         for (const mrUrl of attributes.mrUrls) {
-          if (!approvalsByMr.has(mrUrl)) {
-            const approvals = await callGitlabForMr(mrUrl, config.gitlabToken)
+          let approvals = null
+          if (approvalsByMr.has(mrUrl)) {
+            approvals = approvalsByMr.get(mrUrl)
+          } else {
+            approvals = await callGitlabForMr(mrUrl, config.gitlabToken)
             approvalsByMr.set(mrUrl, approvals)
+          }
+          warnings.mrs.push({ mrUrl, approvals })
+          if (typeof approvals !== 'number' || approvals < 2) {
+            warnings.lowApprovals = true
           }
         }
       } else {
         missingTasks.add(idtask)
+        warnings.missingMr = true
       }
+
       const changelogHasValue = attributes.changelogValues.some((value) => {
         if (typeof value !== 'string') return false
         return value.trim().length > 0
       })
       if (!changelogHasValue) {
         missingChangelogTasks.add(idtask)
+        warnings.missingChangelog = true
       }
+
+      taskWarnings[idtask] = warnings
     }
   }
+
+  // Inject warnings into the page cards
+  await executeScript({
+    target: { tabId: activeTab.id },
+    func: injectWarnings,
+    args: [taskWarnings]
+  })
 
   chrome.storage.sync.set({
     kanbanMissingTasks: Array.from(missingTasks),
