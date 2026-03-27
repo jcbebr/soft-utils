@@ -7,7 +7,7 @@
     "service_worker": "/app/background.js"
   },
   "permissions": ["tabs", "storage", "activeTab", "scripting", "alarms"],
-  "host_permissions": ["https://sesuite.softexpert.com/*", "https://*/api/v4/*"],
+  "host_permissions": ["https://*/*"],
   "action": {
     "default_popup": "/app/popup/popup.html",
     "default_icon": {

@@ -2,10 +2,72 @@ const DEFAULTS = {
   colorBackground: '#1d4c58',
   colorText: '#ffffff',
   fillCt: '📄',
-  kanbanPageUrl: 'https://sesuite.softexpert.com/softexpert/workspace?page=305154,275',
+  kanbanPageUrl: '',
   kanbanIntervalMinutes: 10,
   kanbanWorkspaceId: '310',
   gitlabToken: ''
+}
+
+/**
+ * Canonical Kanban lanes (order = typical left-to-right on the board).
+ * `checks`: reserved for future per-lane validation (e.g. task attributes in "Testing").
+ */
+const KANBAN_LANE_CONFIG = [
+  { id: 'todo', label: 'To do', checks: null },
+  { id: 'in_progress', label: 'In Progress', checks: null },
+  { id: 'code_review', label: 'Code Review', checks: null },
+  { id: 'last_review', label: 'Last Review', checks: null },
+  { id: 'ready_to_test', label: 'Ready to Test', checks: null },
+  { id: 'testing', label: 'Testing', checks: null },
+  { id: 'rehab', label: 'Rehab', checks: null },
+  { id: 'ready_to_merge', label: 'Ready to Merge', checks: null },
+  { id: 'closed', label: 'Closed', checks: null }
+]
+
+function getKanbanLaneConfigForPageScript() {
+  return KANBAN_LANE_CONFIG.map(({ id, label }) => ({ id, label }))
+}
+
+const KANBAN_LANE_ORDER = KANBAN_LANE_CONFIG.map((l) => l.id)
+
+function laneOrderIndex(laneId) {
+  if (typeof laneId !== 'string') return -1
+  return KANBAN_LANE_ORDER.indexOf(laneId)
+}
+
+function isLaneAtOrAfter(laneId, minLaneId) {
+  const a = laneOrderIndex(laneId)
+  const b = laneOrderIndex(minLaneId)
+  if (a < 0 || b < 0) return false
+  return a >= b
+}
+
+/** Last Review onward: stricter bar (3 GitLab approvals per MR, 3 CR devs). */
+function minGitlabApprovalsForLane(laneId) {
+  if (!laneId) return 2
+  return isLaneAtOrAfter(laneId, 'last_review') ? 3 : 2
+}
+
+function minCrAssigneesForLane(laneId) {
+  if (!laneId) return 0
+  if (isLaneAtOrAfter(laneId, 'last_review')) return 3
+  if (isLaneAtOrAfter(laneId, 'code_review')) return 2
+  return 0
+}
+
+function countSesiuteUserListValues(values) {
+  if (!Array.isArray(values)) return 0
+  return values.filter((v) => v != null && String(v).trim() !== '').length
+}
+
+function isCrAssigneeAttribute(attr) {
+  const s = String(attr.nmlabel || '').toLowerCase()
+  return s.includes('pelo cr') && !s.includes('obsoleto')
+}
+
+function isCtAssigneeAttribute(attr) {
+  const s = String(attr.nmlabel || '').toLowerCase()
+  return s.includes('pelo ct') && !s.includes('obsoleto')
 }
 
 function setDefaultValue(key, value) {
@@ -38,20 +100,45 @@ function queryTabs(queryInfo) {
 }
 
 function executeScript(details) {
-  return new Promise((resolve) => {
-    chrome.scripting.executeScript(details, resolve)
+  return new Promise((resolve, reject) => {
+    chrome.scripting.executeScript(details, (results) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message))
+        return
+      }
+      resolve(results)
+    })
   })
 }
 
-async function fetchTaskData(idtask, cdworkspace) {
-  if (!idtask || !cdworkspace) return ''
+function incrementApiRequestCount(kind) {
+  chrome.storage.local.get(['apiRequestCounts'], (data) => {
+    const counts = data.apiRequestCounts || { gitlab: 0, sesuite: 0 }
+    counts[kind] = (counts[kind] || 0) + 1
+    chrome.storage.local.set({ apiRequestCounts: counts })
+  })
+}
+
+function getSesOriginFromKanbanPageUrl(kanbanPageUrl) {
+  if (!kanbanPageUrl || typeof kanbanPageUrl !== 'string') return ''
+  try {
+    return new URL(kanbanPageUrl.trim()).origin
+  } catch {
+    return ''
+  }
+}
+
+async function fetchTaskData(idtask, cdworkspace, sesOrigin) {
+  if (!idtask || !cdworkspace || !sesOrigin) return ''
+  incrementApiRequestCount('sesuite')
   const formData = new URLSearchParams({
     idtask,
     cdworkspace,
     action: '2',
     view: '2'
   })
-  const response = await fetch('https://sesuite.softexpert.com/se/task/rest/taskData.php', {
+  const taskDataUrl = `${sesOrigin}/se/task/rest/taskData.php`
+  const response = await fetch(taskDataUrl, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8'
@@ -63,17 +150,31 @@ async function fetchTaskData(idtask, cdworkspace) {
 }
 
 function extractTaskAttributes(taskDataText) {
-  if (!taskDataText) return { mrUrls: [], changelogValues: [] }
+  if (!taskDataText) {
+    return {
+      mrUrls: [],
+      changelogValues: [],
+      crAssigneeCount: 0,
+      ctAssigneeCount: 0
+    }
+  }
   let payload = null
   try {
     payload = JSON.parse(taskDataText)
   } catch (error) {
-    return { mrUrls: [], changelogValues: [] }
+    return {
+      mrUrls: [],
+      changelogValues: [],
+      crAssigneeCount: 0,
+      ctAssigneeCount: 0
+    }
   }
 
   const results = payload && payload.results && Array.isArray(payload.results) ? payload.results : []
   const urls = []
   const changelogValues = []
+  let crAssigneeCount = 0
+  let ctAssigneeCount = 0
 
   results.forEach((result) => {
     const attributes = result && Array.isArray(result.attributeList) ? result.attributeList : []
@@ -94,6 +195,17 @@ function extractTaskAttributes(taskDataText) {
     changelog.forEach((value) => {
       changelogValues.push(value)
     })
+
+    attributes.forEach((attr) => {
+      if (isCrAssigneeAttribute(attr)) {
+        const n = countSesiuteUserListValues(attr.values)
+        if (n > crAssigneeCount) crAssigneeCount = n
+      }
+      if (isCtAssigneeAttribute(attr)) {
+        const n = countSesiuteUserListValues(attr.values)
+        if (n > ctAssigneeCount) ctAssigneeCount = n
+      }
+    })
   })
 
   const mrIds = []
@@ -109,7 +221,9 @@ function extractTaskAttributes(taskDataText) {
 
   return {
     mrUrls: Array.from(new Set(mrIds)),
-    changelogValues
+    changelogValues,
+    crAssigneeCount,
+    ctAssigneeCount
   }
 }
 
@@ -122,6 +236,7 @@ async function fetchGitlab(url, token) {
 }
 
 async function fetchGitlabJson(url, token) {
+  incrementApiRequestCount('gitlab')
   const response = await fetchGitlab(url, token)
   if (!response.ok) return null
   try {
@@ -169,30 +284,104 @@ async function callGitlabForMr(mrUrl, token) {
   return approvedBy
 }
 
-function collectKanbanTasks(pageUrl) {
-  if (!pageUrl || !window.location.href.startsWith(pageUrl)) return { tasks: [] }
+function collectKanbanTasks(pageUrl, laneConfig) {
+  function normalizeLaneName(raw) {
+    if (typeof raw !== 'string') return ''
+    const collapsed = raw.replace(/\s+/g, ' ').trim()
+    const withoutLeadingCount = collapsed.replace(/^\d+/, '').trim()
+    return withoutLeadingCount || collapsed
+  }
+
+  function laneKeyFromLabel(label) {
+    return normalizeLaneName(typeof label === 'string' ? label : '').toLowerCase()
+  }
+
+  const lanes = Array.isArray(laneConfig) ? laneConfig : []
+  const configByLaneKey = new Map()
+  lanes.forEach((entry) => {
+    if (entry && typeof entry.id === 'string' && typeof entry.label === 'string') {
+      configByLaneKey.set(laneKeyFromLabel(entry.label), entry)
+    }
+  })
+
+  function kanbanPageMatches(href, configured) {
+    if (!configured || typeof configured !== 'string') return false
+    const trimmed = configured.trim()
+    if (!trimmed) return false
+    try {
+      const cur = new URL(href)
+      const cfg = new URL(trimmed)
+      if (cur.origin !== cfg.origin) return false
+      const normPath = (p) => (p.length > 1 && p.endsWith('/') ? p.slice(0, -1) : p)
+      if (normPath(cur.pathname) !== normPath(cfg.pathname)) return false
+      if (cfg.search === '') return true
+      const curParams = cur.searchParams
+      const cfgParams = cfg.searchParams
+      for (const key of cfgParams.keys()) {
+        const want = cfgParams.getAll(key)
+        const have = curParams.getAll(key)
+        if (want.length !== have.length) return false
+        for (let i = 0; i < want.length; i++) {
+          if (have[i] !== want[i]) return false
+        }
+      }
+      return true
+    } catch {
+      return href.startsWith(trimmed)
+    }
+  }
+
+  const href = window.location.href
+  if (!pageUrl || !kanbanPageMatches(href, pageUrl)) {
+    return {
+      tasks: [],
+      reason: 'url-mismatch',
+      href,
+      configured: pageUrl
+    }
+  }
+
   const laneHeaders = document.querySelectorAll('.LaneHeader')
   const laneBodies = document.querySelectorAll('.LaneBody')
 
   if (!laneHeaders || laneHeaders.length === 0) return { tasks: [], reason: 'no-lane-headers' }
   if (!laneBodies || laneBodies.length === 0) return { tasks: [], reason: 'no-lane-bodies' }
-  
-  const tasks = []
+
+  const taskById = new Map()
   laneHeaders.forEach((header, index) => {
-    if (index < 2 || index > 7) return
     const laneBody = laneBodies[index]
     if (!laneBody) return
+    const laneName = normalizeLaneName(header.textContent || '')
+    const laneKey = laneKeyFromLabel(laneName)
+    const laneEntry = configByLaneKey.get(laneKey)
+    if (!laneEntry) return
+
     const cards = laneBody.querySelectorAll('[data-test-selector="rctCardBase"]')
-    
+
     if (!cards || cards.length === 0) return
     cards.forEach((card) => {
       const span = card.querySelector('.Card__identifier a')
       const idtask = span && span.innerText ? span.innerText.trim() : ''
-      if (idtask) tasks.push(idtask)
+      if (!idtask || taskById.has(idtask)) return
+      taskById.set(idtask, {
+        taskId: idtask,
+        laneName,
+        laneId: laneEntry.id
+      })
     })
   })
 
-  return { tasks: Array.from(new Set(tasks)) }
+  const tasks = Array.from(taskById.values())
+  if (tasks.length === 0) {
+    return {
+      tasks: [],
+      reason: 'no-cards-in-lanes',
+      laneHeaderCount: laneHeaders.length,
+      laneBodyCount: laneBodies.length
+    }
+  }
+
+  return { tasks }
 }
 
 function injectWarnings(taskWarnings) {
@@ -348,6 +537,11 @@ function injectWarnings(taskWarnings) {
       .su-warn-mr-url:hover {
         text-decoration: underline;
       }
+      .su-warn-assignee-label {
+        flex: 1;
+        min-width: 0;
+        font-weight: 500;
+      }
       .su-warn-approvals {
         margin-left: auto;
         font-weight: 600;
@@ -425,11 +619,12 @@ function injectWarnings(taskWarnings) {
       noMr.innerHTML = '<span class="su-warn-icon">❌</span> No MR linked'
       mrSection.appendChild(noMr)
     } else if (warnings.mrs && warnings.mrs.length > 0) {
+      var minMr = typeof warnings.minMrApprovals === 'number' ? warnings.minMrApprovals : 2
       warnings.mrs.forEach(function(mr) {
         const mrItem = document.createElement('div')
         const isUnknown = typeof mr.approvals !== 'number'
-        const isLow = !isUnknown && mr.approvals < 2
-        const isOk = !isUnknown && mr.approvals >= 2
+        const isLow = !isUnknown && mr.approvals < minMr
+        const isOk = !isUnknown && mr.approvals >= minMr
         mrItem.className = 'su-warn-item ' + (isOk ? 'su-warn-item--ok' : isLow ? 'su-warn-item--warning' : 'su-warn-item--error')
         const projectName = mr.mrUrl.split('/-/')[0].split('/').slice(-1)[0] || mr.mrUrl
         const approvalsLabel = isUnknown ? '?' : mr.approvals
@@ -438,11 +633,50 @@ function injectWarnings(taskWarnings) {
           '<span class="su-warn-icon">' + icon + '</span>' +
           '<a href="' + mr.mrUrl + '" target="_blank" class="su-warn-mr-url">' + projectName + ' #' + (mr.mrUrl.match(/merge_requests\/(\d+)/) || ['','?'])[1] + '</a>' +
           '<span class="su-warn-approvals ' + (isOk ? 'su-warn-approvals--ok' : 'su-warn-approvals--low') + '">' +
-          approvalsLabel + '/2 approvals</span>'
+          approvalsLabel + '/' + minMr + ' approvals</span>'
         mrSection.appendChild(mrItem)
       })
     }
     body.appendChild(mrSection)
+
+    var sesSection = document.createElement('div')
+    sesSection.className = 'su-warn-section'
+    var sesTitle = document.createElement('div')
+    sesTitle.className = 'su-warn-section__title'
+    sesTitle.textContent = 'SES assignees'
+    sesSection.appendChild(sesTitle)
+
+    if (warnings.requiresCrCheck) {
+      var minCr = typeof warnings.minCrAssignees === 'number' ? warnings.minCrAssignees : 2
+      var crCount = warnings.crAssigneeCount != null ? warnings.crAssigneeCount : 0
+      var crRow = document.createElement('div')
+      var crOk = !warnings.lowCrAssignees
+      crRow.className = 'su-warn-item ' + (crOk ? 'su-warn-item--ok' : 'su-warn-item--error')
+      crRow.innerHTML =
+        '<span class="su-warn-icon">' + (crOk ? '✅' : '❌') + '</span>' +
+        '<span class="su-warn-assignee-label">Code review assignees</span>' +
+        '<span class="su-warn-approvals ' + (crOk ? 'su-warn-approvals--ok' : 'su-warn-approvals--low') + '">' +
+        crCount + '/' + minCr + '</span>'
+      sesSection.appendChild(crRow)
+    }
+
+    if (warnings.requiresCtCheck) {
+      var ctMin = 1
+      var ctCount = warnings.ctAssigneeCount != null ? warnings.ctAssigneeCount : 0
+      var ctRow = document.createElement('div')
+      var ctOk = !warnings.missingCtAssignees
+      ctRow.className = 'su-warn-item ' + (ctOk ? 'su-warn-item--ok' : 'su-warn-item--error')
+      ctRow.innerHTML =
+        '<span class="su-warn-icon">' + (ctOk ? '✅' : '❌') + '</span>' +
+        '<span class="su-warn-assignee-label">Test assignees</span>' +
+        '<span class="su-warn-approvals ' + (ctOk ? 'su-warn-approvals--ok' : 'su-warn-approvals--low') + '">' +
+        ctCount + '/' + ctMin + '</span>'
+      sesSection.appendChild(ctRow)
+    }
+
+    if (warnings.requiresCrCheck || warnings.requiresCtCheck) {
+      body.appendChild(sesSection)
+    }
 
     popup.appendChild(body)
     overlay.appendChild(popup)
@@ -452,7 +686,8 @@ function injectWarnings(taskWarnings) {
   // Inject badges on each card
   Object.keys(taskWarnings).forEach(function(taskId) {
     const warnings = taskWarnings[taskId]
-    const hasIssue = warnings.missingChangelog || warnings.missingMr || warnings.lowApprovals
+    var hasIssue = warnings.missingChangelog || warnings.missingMr || warnings.lowApprovals ||
+      warnings.lowCrAssignees || warnings.missingCtAssignees
     if (!hasIssue) return
 
     const cards = document.querySelectorAll('[data-test-selector="rctCardBase"]')
@@ -469,12 +704,18 @@ function injectWarnings(taskWarnings) {
       // Remove previous badge on this card
       parent.querySelectorAll('.su-warn-badge').forEach(el => el.remove())
 
+      var minMrForBadge = typeof warnings.minMrApprovals === 'number' ? warnings.minMrApprovals : 2
       const issueCount = (warnings.missingChangelog ? 1 : 0) +
         (warnings.missingMr ? 1 : 0) +
-        (warnings.lowApprovals ? warnings.mrs.filter(function(m) { return typeof m.approvals !== 'number' || m.approvals < 2 }).length : 0)
+        (warnings.lowApprovals ? warnings.mrs.filter(function(m) {
+          return typeof m.approvals !== 'number' || m.approvals < minMrForBadge
+        }).length : 0) +
+        (warnings.lowCrAssignees ? 1 : 0) +
+        (warnings.missingCtAssignees ? 1 : 0)
 
       const badge = document.createElement('div')
-      badge.className = 'su-warn-badge' + (warnings.missingChangelog || warnings.missingMr ? '' : ' su-warn-badge--yellow')
+      badge.className = 'su-warn-badge' +
+        (warnings.missingChangelog || warnings.missingMr || warnings.lowCrAssignees || warnings.missingCtAssignees ? '' : ' su-warn-badge--yellow')
       badge.textContent = issueCount > 9 ? '9+' : String(issueCount)
       badge.title = 'Click for details'
 
@@ -490,41 +731,143 @@ function injectWarnings(taskWarnings) {
 }
 
 async function scanKanbanBoard() {
+  console.log('[soft-utils] scanKanbanBoard: start')
   const config = await getStorageValues([
     'kanbanPageUrl',
     'kanbanWorkspaceId',
     'gitlabToken'
   ])
 
-  if (!config.kanbanPageUrl) return
+  if (!config.kanbanPageUrl) {
+    console.warn('[soft-utils] scanKanbanBoard: fail — kanbanPageUrl is empty (set it in extension options)')
+    return { ok: false, reason: 'no-kanban-url' }
+  }
 
   const [activeTab] = await queryTabs({ active: true, currentWindow: true })
-  if (!activeTab || !activeTab.id) return
+  if (!activeTab || !activeTab.id) {
+    console.warn('[soft-utils] scanKanbanBoard: fail — no active tab')
+    return { ok: false, reason: 'no-active-tab' }
+  }
+
+  console.log('[soft-utils] scanKanbanBoard: tab', activeTab.id, activeTab.url || '(no url)')
 
   const missingTasks = new Set()
   const missingChangelogTasks = new Set()
   const approvalsByMr = new Map()
   const taskWarnings = {}
 
-  const result = await executeScript({
-    target: { tabId: activeTab.id },
-    func: collectKanbanTasks,
-    args: [config.kanbanPageUrl]
-  })
+  let result
+  try {
+    result = await executeScript({
+      target: { tabId: activeTab.id },
+      func: collectKanbanTasks,
+      args: [config.kanbanPageUrl, getKanbanLaneConfigForPageScript()]
+    })
+  } catch (err) {
+    console.error(
+      '[soft-utils] scanKanbanBoard: fail — cannot inject on this tab (open the Kanban page in this tab, not chrome:// or another extension)',
+      err
+    )
+    return { ok: false, reason: 'inject-collect-failed', error: String(err) }
+  }
 
   const payload = result && result[0] && result[0].result ? result[0].result : {}
-  const tasks = payload.tasks ? payload.tasks : []
+  const rawTasks = Array.isArray(payload.tasks) ? payload.tasks : []
+  if (payload.reason) {
+    console.warn('[soft-utils] scanKanbanBoard: collectKanbanTasks reason:', payload.reason, payload)
+  }
+  console.log('[soft-utils] scanKanbanBoard: task count', rawTasks.length)
 
-  if (tasks.length > 0) {
-    for (const idtask of tasks) {
-      const taskDataText = await fetchTaskData(idtask, config.kanbanWorkspaceId)
+  if (rawTasks.length === 0 && payload.reason === 'url-mismatch') {
+    console.warn(
+      '[soft-utils] scanKanbanBoard: page URL does not match kanbanPageUrl (options).',
+      'tab:',
+      activeTab.url,
+      'configured:',
+      config.kanbanPageUrl,
+      'injected page reported:',
+      payload.href
+    )
+  } else if (rawTasks.length === 0 && payload.reason === 'no-cards-in-lanes') {
+    console.warn(
+      '[soft-utils] scanKanbanBoard: URL ok but no cards in configured lanes (see KANBAN_LANE_CONFIG).',
+      'laneHeaderCount:',
+      payload.laneHeaderCount,
+      'laneBodyCount:',
+      payload.laneBodyCount
+    )
+  }
+
+  if (rawTasks.length > 0) {
+    for (const entry of rawTasks) {
+      const idtask =
+        typeof entry === 'string'
+          ? entry
+          : entry && typeof entry.taskId === 'string'
+            ? entry.taskId
+            : ''
+      const laneName =
+        typeof entry === 'object' && entry && typeof entry.laneName === 'string'
+          ? entry.laneName
+          : ''
+      const laneId =
+        typeof entry === 'object' && entry && typeof entry.laneId === 'string'
+          ? entry.laneId
+          : ''
+      if (!idtask) continue
+
+      if (laneId === 'todo' || laneId === 'in_progress') {
+        taskWarnings[idtask] = {
+          laneName,
+          laneId,
+          skipAllChecks: true,
+          requiresCrCheck: false,
+          requiresCtCheck: false,
+          minMrApprovals: 2,
+          minCrAssignees: 0,
+          crAssigneeCount: 0,
+          ctAssigneeCount: 0,
+          lowCrAssignees: false,
+          missingCtAssignees: false,
+          missingChangelog: false,
+          missingMr: false,
+          lowApprovals: false,
+          mrs: []
+        }
+        continue
+      }
+
+      const sesOrigin = getSesOriginFromKanbanPageUrl(config.kanbanPageUrl)
+      const taskDataText = await fetchTaskData(idtask, config.kanbanWorkspaceId, sesOrigin)
       const attributes = extractTaskAttributes(taskDataText)
 
+      const requiresCrCheck = Boolean(laneId && isLaneAtOrAfter(laneId, 'code_review'))
+      const requiresCtCheck = Boolean(laneId && isLaneAtOrAfter(laneId, 'testing'))
+      const minMrAppr = minGitlabApprovalsForLane(laneId)
+      const minCr = minCrAssigneesForLane(laneId)
+
       const warnings = {
+        laneName,
+        laneId,
+        requiresCrCheck,
+        requiresCtCheck,
+        minMrApprovals: minMrAppr,
+        minCrAssignees: minCr,
+        crAssigneeCount: attributes.crAssigneeCount,
+        ctAssigneeCount: attributes.ctAssigneeCount,
+        lowCrAssignees: false,
+        missingCtAssignees: false,
         missingChangelog: false,
         missingMr: false,
         lowApprovals: false,
         mrs: []
+      }
+
+      if (requiresCrCheck && attributes.crAssigneeCount < minCr) {
+        warnings.lowCrAssignees = true
+      }
+      if (requiresCtCheck && attributes.ctAssigneeCount < 1) {
+        warnings.missingCtAssignees = true
       }
 
       if (attributes.mrUrls.length > 0) {
@@ -537,7 +880,7 @@ async function scanKanbanBoard() {
             approvalsByMr.set(mrUrl, approvals)
           }
           warnings.mrs.push({ mrUrl, approvals })
-          if (typeof approvals !== 'number' || approvals < 2) {
+          if (typeof approvals !== 'number' || approvals < minMrAppr) {
             warnings.lowApprovals = true
           }
         }
@@ -559,22 +902,74 @@ async function scanKanbanBoard() {
     }
   }
 
-  // Inject warnings into the page cards
-  await executeScript({
-    target: { tabId: activeTab.id },
-    func: injectWarnings,
-    args: [taskWarnings]
+  try {
+    await executeScript({
+      target: { tabId: activeTab.id },
+      func: injectWarnings,
+      args: [taskWarnings]
+    })
+  } catch (err) {
+    console.error('[soft-utils] scanKanbanBoard: fail — injectWarnings', err)
+    return { ok: false, reason: 'inject-warnings-failed', error: String(err) }
+  }
+
+  const kanbanTaskDetails = Object.keys(taskWarnings).map((taskId) => {
+    const w = taskWarnings[taskId]
+    return {
+      taskId,
+      laneName: typeof w.laneName === 'string' ? w.laneName : '',
+      laneId: typeof w.laneId === 'string' ? w.laneId : '',
+      skipChecks: Boolean(w.skipAllChecks),
+      missingMr: Boolean(w.missingMr),
+      missingChangelog: Boolean(w.missingChangelog),
+      lowApprovals: Boolean(w.lowApprovals),
+      requiresCrCheck: Boolean(w.requiresCrCheck),
+      requiresCtCheck: Boolean(w.requiresCtCheck),
+      lowCrAssignees: Boolean(w.lowCrAssignees),
+      missingCtAssignees: Boolean(w.missingCtAssignees),
+      crAssigneeCount: typeof w.crAssigneeCount === 'number' ? w.crAssigneeCount : 0,
+      ctAssigneeCount: typeof w.ctAssigneeCount === 'number' ? w.ctAssigneeCount : 0,
+      minMrApprovals: typeof w.minMrApprovals === 'number' ? w.minMrApprovals : 2,
+      minCrAssignees: typeof w.minCrAssignees === 'number' ? w.minCrAssignees : 0,
+      mrs: Array.isArray(w.mrs)
+        ? w.mrs.map((m) => ({
+            mrUrl: m.mrUrl,
+            approvals: typeof m.approvals === 'number' ? m.approvals : null
+          }))
+        : []
+    }
   })
 
-  chrome.storage.sync.set({
-    kanbanMissingTasks: Array.from(missingTasks),
-    kanbanMissingChangelogTasks: Array.from(missingChangelogTasks),
-    kanbanApprovals: Array.from(approvalsByMr.entries()).map(([mrUrl, approvals]) => ({
-      mrUrl,
-      approvals
-    })),
-    kanbanLastRunAt: Date.now()
+  const intervalData = await getStorageValues(['kanbanIntervalMinutes'])
+  const minutes = intervalData.kanbanIntervalMinutes ?? DEFAULTS.kanbanIntervalMinutes
+  updateKanbanAlarm(minutes)
+  console.log('[soft-utils] scanKanbanBoard: kanbanSync alarm reset (interval', minutes, 'min) — before writing storage')
+
+  await new Promise((resolve, reject) => {
+    chrome.storage.sync.set(
+      {
+        kanbanMissingTasks: Array.from(missingTasks),
+        kanbanMissingChangelogTasks: Array.from(missingChangelogTasks),
+        kanbanApprovals: Array.from(approvalsByMr.entries()).map(([mrUrl, approvals]) => ({
+          mrUrl,
+          approvals
+        })),
+        kanbanTaskDetails,
+        kanbanLastRunAt: Date.now()
+      },
+      () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message))
+          return
+        }
+        resolve()
+      }
+    )
   })
+
+  console.log('[soft-utils] scanKanbanBoard: success — storage updated')
+
+  return { ok: true }
 }
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -596,10 +991,20 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== 'kanbanSync') return
-  scanKanbanBoard()
+  scanKanbanBoard().catch((err) => {
+    console.error('[soft-utils] scanKanbanBoard (alarm):', err)
+  })
 })
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (!message || message.type !== 'scanKanbanBoard') return
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (!message || message.type !== 'scanKanbanBoard') return false
   scanKanbanBoard()
+    .then((result) => {
+      sendResponse(result && typeof result === 'object' ? result : { ok: true })
+    })
+    .catch((err) => {
+      console.error('[soft-utils] scanKanbanBoard (message):', err)
+      sendResponse({ ok: false, reason: 'exception', error: String(err) })
+    })
+  return true
 })

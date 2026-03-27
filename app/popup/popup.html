@@ -8,14 +8,41 @@
 <body>
   <button id="fillCt">Preencher CT</button>
   <button id="scanKanban">Scan Kanban</button>
-  <div id="kanbanStatus">
-    <h3>Missing MR</h3>
-    <div id="kanbanLastRun"></div>
-    <ul id="kanbanMissingList"></ul>
-    <h3>Missing Changelog</h3>
-    <ul id="kanbanMissingChangelogList"></ul>
-    <h3>Approvals</h3>
-    <ul id="kanbanApprovalsList"></ul>
+  <span id="scanKanbanHint" class="scan-hint" aria-live="polite"></span>
+  <button id="debug" type="button">Debug</button>
+  <div id="debugPanel" class="su-debug-panel" hidden>
+    <h3>Debug</h3>
+    <div id="debugLastRun" class="su-debug-last-run"></div>
+    <div id="debugNextScan" class="su-debug-next-scan"></div>
+    <div class="su-debug-stats">
+      <div class="su-debug-stat">
+        <div class="su-debug-stat__label">GitLab API requests</div>
+        <div class="su-debug-stat__value" id="debugCountGitlab">0</div>
+      </div>
+      <div class="su-debug-stat">
+        <div class="su-debug-stat__label">SESuite API requests</div>
+        <div class="su-debug-stat__value" id="debugCountSesuite">0</div>
+      </div>
+    </div>
+    <button id="debugClear" type="button" class="su-debug-clear">Clear scan data &amp; API stats</button>
+    <div class="su-debug-table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Task</th>
+            <th>Lane</th>
+            <th scope="col" title="Lane id (KANBAN_LANE_CONFIG)">Id</th>
+            <th scope="col" title="Missing MR">MR</th>
+            <th scope="col" title="Missing changelog">Chg</th>
+            <th scope="col" title="GitLab MR approvals below required (2 before Last Review; 3 from Last Review on)">Appr</th>
+            <th scope="col" title="CR assignees: need 2 from Code Review; 3 from Last Review on">CR</th>
+            <th scope="col" title="CT assignees missing (Testing+)">CT</th>
+            <th scope="col" title="Merge requests &amp; approval counts">MRs</th>
+          </tr>
+        </thead>
+        <tbody id="debugTableBody"></tbody>
+      </table>
+    </div>
   </div>
   <script type="module" src="popup.js"></script>
 </body>

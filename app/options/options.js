@@ -12,7 +12,7 @@ getStorage((data) => {
   const colorBackground = data.colorBackground || '#1d4c58'
   const colorText = data.colorText || '#ffffff'
   const fillCt = data.fillCt || ''
-  const kanbanPageUrl = data.kanbanPageUrl || 'https://sesuite.softexpert.com/softexpert/workspace?page=305154,275'
+  const kanbanPageUrl = data.kanbanPageUrl || ''
   const kanbanWorkspaceId = data.kanbanWorkspaceId || '310'
   const kanbanIntervalMinutes = data.kanbanIntervalMinutes || 10
   const gitlabToken = data.gitlabToken || ''

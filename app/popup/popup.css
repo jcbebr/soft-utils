@@ -4,8 +4,8 @@ button {
   display: inline-block;
   outline: 0;
   cursor: pointer;
-  padding: 5px 16px;
-  font-size: 14px;
+  padding: 6px 16px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 20px;
   vertical-align: middle;
@@ -21,27 +21,197 @@ button:hover {
   transition-duration: 0.2s;
 }
 
-body {
-  background-color: var(--colorBackground)
+/* Chrome caps extension popups (~800px); match that so nothing overflows horizontally */
+html {
+  box-sizing: border-box;
 }
 
-#kanbanStatus {
-  margin: 10px;
+*,
+*::before,
+*::after {
+  box-sizing: inherit;
+}
+
+body {
+  background-color: var(--colorBackground);
+  margin: 0;
+  padding: 10px 14px 14px;
+  width: 800px;
+  max-width: 100%;
+  overflow-x: hidden;
+}
+
+.scan-hint {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 13px;
+  font-family: monospace;
+  color: var(--colorText);
+  opacity: 0.85;
+  vertical-align: middle;
+}
+
+.su-debug-panel {
+  margin: 12px 0;
+  padding: 0 0 10px 0;
+  max-width: 100%;
+  min-width: 0;
   color: var(--colorText);
   font-family: monospace;
+  font-size: 13px;
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  padding-top: 12px;
+}
+
+.su-debug-panel h3 {
+  margin: 0 0 10px 0;
+  font-size: 1.05rem;
+}
+
+.su-debug-last-run {
+  opacity: 0.9;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+
+.su-debug-next-scan {
+  opacity: 0.9;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.su-debug-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.su-debug-stat {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background-color: rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.su-debug-stat__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.75;
+  margin-bottom: 4px;
+}
+
+.su-debug-stat__value {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+button.su-debug-clear {
+  width: auto;
+  margin: 0 0 12px 0;
+  display: block;
+  font-size: 13px;
+  padding: 6px 14px;
+  background-color: rgba(180, 60, 60, 0.35);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+button.su-debug-clear:hover {
+  background-color: rgba(200, 70, 70, 0.45);
+}
+
+.su-debug-table-wrap {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+}
+
+.su-debug-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.su-debug-panel th,
+.su-debug-panel td {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  vertical-align: top;
+}
+
+.su-debug-panel thead th {
+  white-space: nowrap;
   font-size: 12px;
 }
 
-#kanbanStatus h3 {
-  margin: 8px 0 4px 0;
+.su-debug-panel th:nth-child(4),
+.su-debug-panel th:nth-child(5),
+.su-debug-panel th:nth-child(6),
+.su-debug-panel th:nth-child(7),
+.su-debug-panel th:nth-child(8) {
+  text-align: center;
 }
 
-#kanbanLastRun {
+.su-debug-panel td:nth-child(1) {
+  white-space: nowrap;
+}
+
+.su-debug-panel td:nth-child(4),
+.su-debug-panel td:nth-child(5),
+.su-debug-panel td:nth-child(6),
+.su-debug-panel td:nth-child(7),
+.su-debug-panel td:nth-child(8) {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.su-debug-panel .su-debug-na {
+  opacity: 0.55;
+}
+
+.su-debug-panel .su-debug-lane-id {
+  font-size: 12px;
+  opacity: 0.92;
+  white-space: nowrap;
+}
+
+.su-debug-panel .su-debug-lane {
+  max-width: 14rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.su-debug-panel th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background-color: var(--colorBackground);
+  font-weight: 600;
+}
+
+.su-debug-panel tr:last-child td {
+  border-bottom: none;
+}
+
+.su-debug-panel .su-debug-yes {
+  color: #ffb4a8;
+  font-weight: 600;
+}
+
+.su-debug-panel .su-debug-no {
+  color: #a8f5c8;
+}
+
+.su-debug-panel .su-debug-mrs {
+  word-break: break-word;
+  overflow-wrap: break-word;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.su-debug-panel .su-debug-empty {
   opacity: 0.8;
-  margin-bottom: 6px;
-}
-
-#kanbanMissingList {
-  margin: 0;
-  padding-left: 16px;
+  padding: 8px;
 }
